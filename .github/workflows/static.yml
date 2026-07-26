@@ -1,43 +1,563 @@
-# Simple workflow for deploying static content to GitHub Pages
-name: Deploy static content to Pages
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+<title>Финансы</title>
+<script src="https://telegram.org/js/telegram-web-app.js"></script>
+<script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+<script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,600;9..144,700&family=IBM+Plex+Sans:wght@400;500;600&display=swap');
+  * { box-sizing: border-box; }
+  body { margin: 0; background: #EAEFE9; font-family: 'IBM Plex Sans', sans-serif; color: #1B2B22; }
+  .ff-display { font-family: 'Fraunces', serif; }
+  input:focus { border-color: #3E5C76 !important; outline: none; }
+  button { cursor: pointer; border: none; font-family: inherit; }
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel">
+const { useState, useEffect, useMemo } = React;
 
-on:
-  # Runs on pushes targeting the default branch
-  push:
-    branches: ["main"]
+const META = {
+  needs:   { label: 'Необходимое', hint: 'На жизнь',   color: '#3E5C76', soft: '#E4EBF1' },
+  wants:   { label: 'Желания',     hint: 'Для себя',   color: '#B5502F', soft: '#F3E2DA' },
+  savings: { label: 'Накопления',  hint: 'На будущее', color: '#8A6E1E', soft: '#F0E9D2' },
+};
+const CATS = ['needs', 'wants', 'savings'];
+const fmt = (n) => new Intl.NumberFormat('ru-RU').format(Math.round(n || 0)) + ' ₽';
+const uid = () => Math.random().toString(36).slice(2, 9);
 
-  # Allows you to run this workflow manually from the Actions tab
-  workflow_dispatch:
+const DEFAULT_DATA = {
+  percents: { needs: 50, wants: 30, savings: 20 },
+  balances: { needs: 0, wants: 0, savings: 0 },
+  goals: { wants: [], savings: [] },
+  subcats: { needs: ['Еда', 'Транспорт', 'Интернет'], wants: ['Развлечения'] },
+  incomeLog: [],
+  expenseLog: [],
+};
 
-# Sets permissions of the GITHUB_TOKEN to allow deployment to GitHub Pages
-permissions:
-  contents: read
-  pages: write
-  id-token: write
+// --- Storage: Telegram CloudStorage when running inside Telegram, localStorage otherwise ---
+const tg = window.Telegram && window.Telegram.WebApp ? window.Telegram.WebApp : null;
+const storage = {
+  get(key) {
+    return new Promise((resolve) => {
+      if (tg && tg.CloudStorage) {
+        tg.CloudStorage.getItem(key, (err, value) => resolve(err ? null : value));
+      } else {
+        resolve(window.localStorage.getItem(key));
+      }
+    });
+  },
+  set(key, value) {
+    return new Promise((resolve) => {
+      if (tg && tg.CloudStorage) {
+        tg.CloudStorage.setItem(key, value, (err, ok) => resolve(!err));
+      } else {
+        window.localStorage.setItem(key, value);
+        resolve(true);
+      }
+    });
+  },
+};
 
-# Allow only one concurrent deployment, skipping runs queued between the run in-progress and latest queued.
-# However, do NOT cancel in-progress runs as we want to allow these production deployments to complete.
-concurrency:
-  group: "pages"
-  cancel-in-progress: false
+function Donut({ segments, size = 168, stroke = 20 }) {
+  const r = (size - stroke) / 2;
+  const c = 2 * Math.PI * r;
+  const total = segments.reduce((s, x) => s + x.value, 0) || 1;
+  let offset = 0;
+  return (
+    <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`}>
+      <circle cx={size / 2} cy={size / 2} r={r} fill="none" stroke="#E7E4D8" strokeWidth={stroke} />
+      {segments.map((s, i) => {
+        const frac = s.value / total;
+        const dash = frac * c;
+        const el = (
+          <circle key={i} cx={size / 2} cy={size / 2} r={r} fill="none" stroke={s.color} strokeWidth={stroke}
+            strokeDasharray={`${dash} ${c - dash}`} strokeDashoffset={-offset} strokeLinecap="butt"
+            transform={`rotate(-90 ${size / 2} ${size / 2})`} />
+        );
+        offset += dash;
+        return el;
+      })}
+    </svg>
+  );
+}
 
-jobs:
-  # Single deploy job since we're just deploying
-  deploy:
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-      - name: Setup Pages
-        uses: actions/configure-pages@v5
-      - name: Upload artifact
-        uses: actions/upload-pages-artifact@v3
-        with:
-          # Upload entire repository
-          path: '.'
-      - name: Deploy to GitHub Pages
-        id: deployment
-        uses: actions/deploy-pages@v5
+function Bar({ label, value, max, color }) {
+  const pct = max > 0 ? Math.min(100, (value / max) * 100) : 0;
+  return (
+    <div style={{ marginBottom: 10 }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, marginBottom: 4 }}>
+        <span>{label}</span><span style={{ color: '#6B7268' }}>{fmt(value)}</span>
+      </div>
+      <div style={{ width: '100%', background: '#E7E4D8', borderRadius: 999, height: 8 }}>
+        <div style={{ width: pct + '%', background: color, height: 8, borderRadius: 999 }} />
+      </div>
+    </div>
+  );
+}
+
+function Field({ label, children }) {
+  return (
+    <label style={{ display: 'block', marginBottom: 16 }}>
+      <span style={{ display: 'block', fontSize: 12, fontWeight: 500, marginBottom: 6, color: '#6B7268' }}>{label}</span>
+      {children}
+    </label>
+  );
+}
+
+const inputStyle = { width: '100%', borderRadius: 12, padding: '12px 14px', fontSize: 16, border: '1px solid #DDD8C8', background: '#fff' };
+
+function GoalBar({ goal, color }) {
+  const pct = goal.target > 0 ? Math.min(100, (goal.current / goal.target) * 100) : 0;
+  return (
+    <div style={{ width: '100%' }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 14, marginBottom: 4 }}>
+        <span style={{ fontWeight: 500 }}>{goal.name}</span>
+        <span style={{ color: '#6B7268' }}>{fmt(goal.current)}{goal.target > 0 ? ` / ${fmt(goal.target)}` : ''}</span>
+      </div>
+      <div style={{ width: '100%', borderRadius: 999, height: 8, background: '#E7E4D8' }}>
+        <div style={{ width: pct + '%', height: 8, borderRadius: 999, background: color }} />
+      </div>
+    </div>
+  );
+}
+
+function App() {
+  const [data, setData] = useState(DEFAULT_DATA);
+  const [loaded, setLoaded] = useState(false);
+  const [tab, setTab] = useState('dashboard');
+  const [pending, setPending] = useState(null);
+  const [showSettings, setShowSettings] = useState(false);
+  const [goalModal, setGoalModal] = useState(null);
+
+  const [incomeAmount, setIncomeAmount] = useState('');
+  const [incomeSource, setIncomeSource] = useState('');
+  const [expCategory, setExpCategory] = useState('needs');
+  const [expSubcat, setExpSubcat] = useState('');
+  const [expAmount, setExpAmount] = useState('');
+
+  useEffect(() => {
+    if (tg) { tg.ready(); tg.expand(); }
+    (async () => {
+      const raw = await storage.get('finance-data');
+      if (raw) { try { setData(JSON.parse(raw)); } catch (e) {} }
+      setLoaded(true);
+    })();
+  }, []);
+
+  useEffect(() => {
+    if (!loaded) return;
+    storage.set('finance-data', JSON.stringify(data));
+  }, [data, loaded]);
+
+  const totalBalance = data.balances.needs + data.balances.wants + data.balances.savings;
+
+  function startAllocation() {
+    const amt = parseFloat(incomeAmount);
+    if (!amt || amt <= 0) return;
+    const needsShare = Math.round(amt * data.percents.needs) / 100;
+    const wantsShare = Math.round(amt * data.percents.wants) / 100;
+    const savingsShare = Math.round(amt * data.percents.savings) / 100;
+    setPending({ amount: amt, source: incomeSource.trim() || 'Доход', needsShare, wantsShare, savingsShare, wantsAlloc: {}, savingsAlloc: {} });
+    setIncomeAmount(''); setIncomeSource('');
+  }
+
+  function confirmAllocation() {
+    if (!pending) return;
+    const wantsAllocated = Object.values(pending.wantsAlloc).reduce((s, v) => s + (parseFloat(v) || 0), 0);
+    const savingsAllocated = Object.values(pending.savingsAlloc).reduce((s, v) => s + (parseFloat(v) || 0), 0);
+    if (wantsAllocated > pending.wantsShare + 0.01 || savingsAllocated > pending.savingsShare + 0.01) return;
+    const newGoals = {
+      wants: data.goals.wants.map(g => ({ ...g, current: g.current + (parseFloat(pending.wantsAlloc[g.id]) || 0) })),
+      savings: data.goals.savings.map(g => ({ ...g, current: g.current + (parseFloat(pending.savingsAlloc[g.id]) || 0) })),
+    };
+    setData(d => ({
+      ...d,
+      balances: {
+        needs: d.balances.needs + pending.needsShare,
+        wants: d.balances.wants + (pending.wantsShare - wantsAllocated),
+        savings: d.balances.savings + (pending.savingsShare - savingsAllocated),
+      },
+      goals: newGoals,
+      incomeLog: [...d.incomeLog, { id: uid(), amount: pending.amount, source: pending.source, date: Date.now(),
+        needsShare: pending.needsShare, wantsShare: pending.wantsShare, savingsShare: pending.savingsShare,
+        wantsAlloc: { ...pending.wantsAlloc }, savingsAlloc: { ...pending.savingsAlloc } }],
+    }));
+    setPending(null); setTab('dashboard');
+  }
+
+  function deleteIncome(entry) {
+    setData(d => {
+      const wantsAllocated = Object.values(entry.wantsAlloc || {}).reduce((s, v) => s + (parseFloat(v) || 0), 0);
+      const savingsAllocated = Object.values(entry.savingsAlloc || {}).reduce((s, v) => s + (parseFloat(v) || 0), 0);
+      const goals = {
+        wants: d.goals.wants.map(g => entry.wantsAlloc && entry.wantsAlloc[g.id] ? { ...g, current: g.current - (parseFloat(entry.wantsAlloc[g.id]) || 0) } : g),
+        savings: d.goals.savings.map(g => entry.savingsAlloc && entry.savingsAlloc[g.id] ? { ...g, current: g.current - (parseFloat(entry.savingsAlloc[g.id]) || 0) } : g),
+      };
+      return {
+        ...d,
+        balances: {
+          needs: d.balances.needs - entry.needsShare,
+          wants: d.balances.wants - (entry.wantsShare - wantsAllocated),
+          savings: d.balances.savings - (entry.savingsShare - savingsAllocated),
+        },
+        goals,
+        incomeLog: d.incomeLog.filter(x => x.id !== entry.id),
+      };
+    });
+  }
+
+  function deleteExpense(entry) {
+    setData(d => ({ ...d, balances: { ...d.balances, [entry.category]: d.balances[entry.category] + entry.amount },
+      expenseLog: d.expenseLog.filter(x => x.id !== entry.id) }));
+  }
+
+  function addExpense() {
+    const amt = parseFloat(expAmount);
+    const subcat = expSubcat.trim();
+    if (!amt || amt <= 0 || !subcat) return;
+    setData(d => {
+      const subcats = { ...d.subcats };
+      if (expCategory !== 'savings') {
+        const list = subcats[expCategory] || [];
+        if (!list.includes(subcat)) subcats[expCategory] = [...list, subcat];
+      }
+      return { ...d, balances: { ...d.balances, [expCategory]: d.balances[expCategory] - amt },
+        expenseLog: [...d.expenseLog, { id: uid(), category: expCategory, subcat, amount: amt, date: Date.now() }], subcats };
+    });
+    setExpAmount(''); setExpSubcat('');
+  }
+
+  function addGoal(category, name, target) {
+    if (!name.trim()) return;
+    setData(d => ({ ...d, goals: { ...d.goals, [category]: [...d.goals[category], { id: uid(), name: name.trim(), target: parseFloat(target) || 0, current: 0 }] } }));
+    setGoalModal(null);
+  }
+  function deleteGoal(category, id) {
+    setData(d => ({ ...d, goals: { ...d.goals, [category]: d.goals[category].filter(g => g.id !== id) } }));
+  }
+  function savePercents(p) {
+    if (p.needs + p.wants + p.savings !== 100) return false;
+    setData(d => ({ ...d, percents: p })); return true;
+  }
+  function resetAll() { setData(DEFAULT_DATA); }
+
+  const analytics = useMemo(() => {
+    const totalIncome = data.incomeLog.reduce((s, x) => s + x.amount, 0);
+    const totalExpense = data.expenseLog.reduce((s, x) => s + x.amount, 0);
+    const byCategory = CATS.map(c => ({ name: META[c].label, color: META[c].color,
+      value: data.expenseLog.filter(x => x.category === c).reduce((s, x) => s + x.amount, 0) })).filter(x => x.value > 0);
+    const bySubcatMap = {};
+    data.expenseLog.forEach(x => { bySubcatMap[x.subcat] = (bySubcatMap[x.subcat] || 0) + x.amount; });
+    const bySubcat = Object.entries(bySubcatMap).map(([name, value]) => ({ name, value })).sort((a, b) => b.value - a.value).slice(0, 6);
+    const bestIncome = data.incomeLog.reduce((m, x) => Math.max(m, x.amount), 0);
+    const maxSubcat = bySubcat.reduce((m, x) => Math.max(m, x.value), 0);
+    return { totalIncome, totalExpense, byCategory, bySubcat, bestIncome, maxSubcat };
+  }, [data.incomeLog, data.expenseLog]);
+
+  if (!loaded) {
+    return <div style={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>Загрузка…</div>;
+  }
+
+  return (
+    <div style={{ display: 'flex', justifyContent: 'center' }}>
+      <div style={{ width: '100%', maxWidth: 480, minHeight: '100vh', display: 'flex', flexDirection: 'column' }}>
+        <div style={{ flex: 1, padding: '32px 20px 96px' }}>
+
+          {pending ? (
+            <AllocateView pending={pending} setPending={setPending} goals={data.goals} onConfirm={confirmAllocation} onCancel={() => setPending(null)} />
+          ) : tab === 'dashboard' ? (
+            <>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 24 }}>
+                <h1 className="ff-display" style={{ fontSize: 24, fontWeight: 600, margin: 0 }}>Финансы</h1>
+                <button onClick={() => setShowSettings(true)} style={{ padding: 8, borderRadius: 999, background: '#fff' }}>⚙️</button>
+              </div>
+              <div style={{ borderRadius: 24, padding: 24, marginBottom: 20, background: '#fff', display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
+                <Donut segments={CATS.map(c => ({ value: data.balances[c] > 0 ? data.balances[c] : 0.0001, color: META[c].color }))} />
+                <div className="ff-display" style={{ fontSize: 30, fontWeight: 600, marginTop: 16 }}>{fmt(totalBalance)}</div>
+                <div style={{ fontSize: 14, marginTop: 4, color: '#6B7268' }}>свободно сейчас</div>
+              </div>
+              <div style={{ marginBottom: 24 }}>
+                {CATS.map(c => (
+                  <div key={c} style={{ borderRadius: 16, padding: 16, marginBottom: 12, display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: META[c].soft }}>
+                    <div>
+                      <div style={{ fontWeight: 500, color: META[c].color }}>{META[c].label}</div>
+                      <div style={{ fontSize: 12, color: '#6B7268' }}>{META[c].hint} · {data.percents[c]}%</div>
+                    </div>
+                    <div className="ff-display" style={{ fontSize: 18, fontWeight: 600 }}>{fmt(data.balances[c])}</div>
+                  </div>
+                ))}
+              </div>
+              {(data.goals.wants.length > 0 || data.goals.savings.length > 0) && (
+                <div>
+                  <h2 style={{ fontSize: 14, fontWeight: 500, color: '#6B7268', marginBottom: 12 }}>Прогресс по целям</h2>
+                  {['wants', 'savings'].flatMap(cat => data.goals[cat].map(g => (
+                    <div key={g.id} style={{ marginBottom: 12 }}><GoalBar goal={g} color={META[cat].color} /></div>
+                  )))}
+                </div>
+              )}
+            </>
+          ) : tab === 'income' ? (
+            <>
+              <h1 className="ff-display" style={{ fontSize: 24, fontWeight: 600, marginBottom: 24 }}>Доход</h1>
+              <Field label="Сумма">
+                <input style={inputStyle} type="number" inputMode="decimal" placeholder="0" value={incomeAmount} onChange={e => setIncomeAmount(e.target.value)} />
+              </Field>
+              <Field label="Источник (необязательно)">
+                <input style={inputStyle} type="text" placeholder="Фриланс, зарплата…" value={incomeSource} onChange={e => setIncomeSource(e.target.value)} />
+              </Field>
+              <button onClick={startAllocation} style={{ width: '100%', padding: '14px', borderRadius: 12, fontWeight: 500, color: '#fff', background: '#3E5C76' }}>⬆️ Распределить</button>
+              {data.incomeLog.length > 0 && (
+                <div style={{ marginTop: 32 }}>
+                  <h2 style={{ fontSize: 14, fontWeight: 500, color: '#6B7268', marginBottom: 12 }}>Последние поступления</h2>
+                  {[...data.incomeLog].reverse().slice(0, 8).map(x => (
+                    <div key={x.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderRadius: 12, padding: '12px 16px', marginBottom: 8, background: '#fff' }}>
+                      <span style={{ fontSize: 14 }}>{x.source}</span>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                        <span style={{ fontWeight: 500 }}>{fmt(x.amount)}</span>
+                        <button onClick={() => deleteIncome(x)} style={{ background: 'none' }}>🗑</button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </>
+          ) : tab === 'expense' ? (
+            <>
+              <h1 className="ff-display" style={{ fontSize: 24, fontWeight: 600, marginBottom: 24 }}>Траты</h1>
+              <Field label="Раздел">
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 8 }}>
+                  {CATS.map(c => (
+                    <button key={c} onClick={() => { setExpCategory(c); setExpSubcat(''); }}
+                      style={{ padding: '10px 0', borderRadius: 12, fontSize: 14, fontWeight: 500, border: `2px solid ${expCategory === c ? META[c].color : 'transparent'}`,
+                        background: expCategory === c ? META[c].soft : '#fff', color: expCategory === c ? META[c].color : '#6B7268' }}>
+                      {META[c].label}
+                    </button>
+                  ))}
+                </div>
+              </Field>
+              <Field label="Статья">
+                <input style={inputStyle} type="text" list="subcat-list" placeholder="Еда, интернет…" value={expSubcat} onChange={e => setExpSubcat(e.target.value)} />
+                <datalist id="subcat-list">{(data.subcats[expCategory] || []).map(s => <option key={s} value={s} />)}</datalist>
+              </Field>
+              <Field label="Сумма">
+                <input style={inputStyle} type="number" inputMode="decimal" placeholder="0" value={expAmount} onChange={e => setExpAmount(e.target.value)} />
+              </Field>
+              <button onClick={addExpense} style={{ width: '100%', padding: 14, borderRadius: 12, fontWeight: 500, color: '#fff', background: META[expCategory].color }}>⬇️ Записать трату</button>
+              {data.expenseLog.length > 0 && (
+                <div style={{ marginTop: 32 }}>
+                  <h2 style={{ fontSize: 14, fontWeight: 500, color: '#6B7268', marginBottom: 12 }}>Последние траты</h2>
+                  {[...data.expenseLog].reverse().slice(0, 8).map(x => (
+                    <div key={x.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderRadius: 12, padding: '12px 16px', marginBottom: 8, background: '#fff' }}>
+                      <div>
+                        <div style={{ fontSize: 14, fontWeight: 500 }}>{x.subcat}</div>
+                        <div style={{ fontSize: 12, color: '#6B7268' }}>{META[x.category].label}</div>
+                      </div>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                        <span style={{ fontWeight: 500 }}>−{fmt(x.amount)}</span>
+                        <button onClick={() => deleteExpense(x)} style={{ background: 'none' }}>🗑</button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </>
+          ) : tab === 'goals' ? (
+            <>
+              <h1 className="ff-display" style={{ fontSize: 24, fontWeight: 600, marginBottom: 24 }}>Цели</h1>
+              {['wants', 'savings'].map(cat => (
+                <div key={cat} style={{ marginBottom: 28 }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
+                    <h2 style={{ fontWeight: 500, color: META[cat].color, margin: 0 }}>{META[cat].label}</h2>
+                    <button onClick={() => setGoalModal({ category: cat })} style={{ padding: 6, borderRadius: 999, background: META[cat].soft, color: META[cat].color }}>➕</button>
+                  </div>
+                  {data.goals[cat].length === 0 ? (
+                    <div style={{ borderRadius: 12, padding: 16, fontSize: 14, background: '#fff', color: '#6B7268' }}>
+                      Пока нет целей. Добавь первую — например, {cat === 'wants' ? '«Поездка в отпуск»' : '«Погашение долга»'}.
+                    </div>
+                  ) : data.goals[cat].map(g => (
+                    <div key={g.id} style={{ borderRadius: 12, padding: 16, marginBottom: 12, background: '#fff', display: 'flex', alignItems: 'flex-start' }}>
+                      <div style={{ flex: 1 }}><GoalBar goal={g} color={META[cat].color} /></div>
+                      <button onClick={() => deleteGoal(cat, g.id)} style={{ marginLeft: 12, background: 'none' }}>🗑</button>
+                    </div>
+                  ))}
+                </div>
+              ))}
+            </>
+          ) : (
+            <>
+              <h1 className="ff-display" style={{ fontSize: 24, fontWeight: 600, marginBottom: 24 }}>Аналитика</h1>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 20 }}>
+                <div style={{ borderRadius: 16, padding: 16, background: '#fff' }}>
+                  <div style={{ fontSize: 12, marginBottom: 4, color: '#6B7268' }}>Всего доход</div>
+                  <div className="ff-display" style={{ fontSize: 20, fontWeight: 600 }}>{fmt(analytics.totalIncome)}</div>
+                </div>
+                <div style={{ borderRadius: 16, padding: 16, background: '#fff' }}>
+                  <div style={{ fontSize: 12, marginBottom: 4, color: '#6B7268' }}>Всего траты</div>
+                  <div className="ff-display" style={{ fontSize: 20, fontWeight: 600 }}>{fmt(analytics.totalExpense)}</div>
+                </div>
+              </div>
+              {analytics.byCategory.length > 0 ? (
+                <div style={{ borderRadius: 16, padding: 16, marginBottom: 20, background: '#fff' }}>
+                  <div style={{ fontSize: 14, fontWeight: 500, marginBottom: 12 }}>Траты по разделам</div>
+                  {analytics.byCategory.map(c => <Bar key={c.name} label={c.name} value={c.value} max={analytics.totalExpense} color={c.color} />)}
+                </div>
+              ) : (
+                <div style={{ borderRadius: 16, padding: 16, marginBottom: 20, fontSize: 14, background: '#fff', color: '#6B7268' }}>
+                  Как только появятся траты — здесь будет разбивка по разделам.
+                </div>
+              )}
+              {analytics.bySubcat.length > 0 && (
+                <div style={{ borderRadius: 16, padding: 16, marginBottom: 20, background: '#fff' }}>
+                  <div style={{ fontSize: 14, fontWeight: 500, marginBottom: 12 }}>Топ статей расходов</div>
+                  {analytics.bySubcat.map(s => <Bar key={s.name} label={s.name} value={s.value} max={analytics.maxSubcat} color="#3E5C76" />)}
+                </div>
+              )}
+              {analytics.bestIncome > 0 && (
+                <div style={{ borderRadius: 16, padding: 16, background: '#F0E9D2' }}>
+                  <div style={{ fontSize: 12, marginBottom: 4, color: '#8A6E1E' }}>Лучшее поступление</div>
+                  <div className="ff-display" style={{ fontSize: 20, fontWeight: 600, color: '#8A6E1E' }}>{fmt(analytics.bestIncome)}</div>
+                </div>
+              )}
+            </>
+          )}
+        </div>
+
+        {!pending && (
+          <div style={{ position: 'fixed', bottom: 0, width: '100%', maxWidth: 480, display: 'flex', justifyContent: 'space-around', alignItems: 'center', padding: '10px 0', background: '#fff', borderTop: '1px solid #E7E4D8' }}>
+            {[
+              { id: 'dashboard', icon: '🏠', label: 'Главная' },
+              { id: 'income', icon: '⬆️', label: 'Доход' },
+              { id: 'expense', icon: '⬇️', label: 'Траты' },
+              { id: 'goals', icon: '🎯', label: 'Цели' },
+              { id: 'analytics', icon: '📊', label: 'Аналитика' },
+            ].map(t => (
+              <button key={t.id} onClick={() => setTab(t.id)} style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 2, background: 'none', padding: '0 8px' }}>
+                <span style={{ fontSize: 18, opacity: tab === t.id ? 1 : 0.4 }}>{t.icon}</span>
+                <span style={{ fontSize: 10, color: tab === t.id ? '#1B2B22' : '#B3ADA0' }}>{t.label}</span>
+              </button>
+            ))}
+          </div>
+        )}
+
+        {showSettings && <SettingsModal percents={data.percents} onSave={savePercents} onClose={() => setShowSettings(false)} onReset={resetAll} />}
+        {goalModal && <GoalModal category={goalModal.category} onAdd={addGoal} onClose={() => setGoalModal(null)} />}
+      </div>
+    </div>
+  );
+}
+
+function AllocateView({ pending, setPending, goals, onConfirm, onCancel }) {
+  const wantsAllocated = Object.values(pending.wantsAlloc).reduce((s, v) => s + (parseFloat(v) || 0), 0);
+  const savingsAllocated = Object.values(pending.savingsAlloc).reduce((s, v) => s + (parseFloat(v) || 0), 0);
+  const wantsLeft = pending.wantsShare - wantsAllocated;
+  const savingsLeft = pending.savingsShare - savingsAllocated;
+  const over = wantsLeft < -0.01 || savingsLeft < -0.01;
+  function update(section, id, val) { setPending(p => ({ ...p, [section]: { ...p[section], [id]: val } })); }
+  return (
+    <div>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 24 }}>
+        <button onClick={onCancel} style={{ padding: 8, borderRadius: 999, background: '#fff' }}>←</button>
+        <h1 className="ff-display" style={{ fontSize: 20, fontWeight: 600, margin: 0 }}>Распредели {fmt(pending.amount)}</h1>
+      </div>
+      <div style={{ borderRadius: 16, padding: 16, marginBottom: 16, background: META.needs.soft }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+          <span style={{ fontWeight: 500, color: META.needs.color }}>{META.needs.label}</span>
+          <span style={{ fontWeight: 600 }}>{fmt(pending.needsShare)}</span>
+        </div>
+        <div style={{ fontSize: 12, marginTop: 4, color: '#6B7268' }}>уходит напрямую в свободные — без целей</div>
+      </div>
+      {['wants', 'savings'].map(section => (
+        <div key={section} style={{ marginBottom: 20 }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+            <span style={{ fontWeight: 500, color: META[section].color }}>{META[section].label}</span>
+            <span style={{ fontWeight: 600 }}>{fmt(pending[`${section}Share`])}</span>
+          </div>
+          {goals[section].length === 0 ? (
+            <div style={{ borderRadius: 12, padding: 12, fontSize: 14, background: '#fff', color: '#6B7268' }}>
+              Нет целей — вся сумма попадёт в свободные {META[section].label.toLowerCase()}.
+            </div>
+          ) : goals[section].map(g => (
+            <div key={g.id} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', borderRadius: 12, padding: '8px 12px', marginBottom: 8, background: '#fff' }}>
+              <span style={{ fontSize: 14, flex: 1 }}>{g.name}</span>
+              <input type="number" inputMode="decimal" placeholder="0" style={{ width: 96, textAlign: 'right', borderRadius: 8, padding: '6px 8px', fontSize: 14, border: '1px solid #DDD8C8' }}
+                value={pending[`${section}Alloc`][g.id] || ''} onChange={e => update(`${section}Alloc`, g.id, e.target.value)} />
+            </div>
+          ))}
+          <div style={{ fontSize: 12, marginTop: 8, color: (section === 'wants' ? wantsLeft : savingsLeft) < -0.01 ? '#B5502F' : '#6B7268' }}>
+            {(section === 'wants' ? wantsLeft : savingsLeft) < -0.01 ? 'Распределено больше, чем есть — уменьши суммы' : `Останется в свободных: ${fmt(section === 'wants' ? wantsLeft : savingsLeft)}`}
+          </div>
+        </div>
+      ))}
+      <button onClick={onConfirm} disabled={over} style={{ width: '100%', padding: 14, borderRadius: 12, fontWeight: 500, color: '#fff', background: over ? '#B3ADA0' : '#1B2B22', marginTop: 8 }}>✓ Подтвердить</button>
+    </div>
+  );
+}
+
+function SettingsModal({ percents, onSave, onClose, onReset }) {
+  const [p, setP] = useState(percents);
+  const [confirmingReset, setConfirmingReset] = useState(false);
+  const sum = p.needs + p.wants + p.savings;
+  return (
+    <div style={{ position: 'fixed', inset: 0, display: 'flex', alignItems: 'flex-end', justifyContent: 'center', background: 'rgba(27,43,34,0.4)' }}>
+      <div style={{ width: '100%', maxWidth: 480, borderRadius: '24px 24px 0 0', padding: 24, background: '#fff' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 }}>
+          <h2 className="ff-display" style={{ fontSize: 18, fontWeight: 600, margin: 0 }}>Проценты распределения</h2>
+          <button onClick={onClose} style={{ background: 'none' }}>✕</button>
+        </div>
+        {CATS.map(c => (
+          <Field key={c} label={META[c].label}>
+            <input type="number" style={inputStyle} value={p[c]} onChange={e => setP({ ...p, [c]: parseInt(e.target.value) || 0 })} />
+          </Field>
+        ))}
+        <div style={{ fontSize: 12, marginBottom: 16, color: sum === 100 ? '#6B7268' : '#B5502F' }}>Сумма: {sum}% {sum !== 100 && '— должно быть ровно 100%'}</div>
+        <button onClick={() => { if (onSave(p)) onClose(); }} disabled={sum !== 100} style={{ width: '100%', padding: 12, borderRadius: 12, fontWeight: 500, color: '#fff', background: sum === 100 ? '#3E5C76' : '#B3ADA0', marginBottom: 12 }}>Сохранить</button>
+        <div style={{ paddingTop: 12, borderTop: '1px solid #E7E4D8' }}>
+          {!confirmingReset ? (
+            <button onClick={() => setConfirmingReset(true)} style={{ width: '100%', padding: 12, borderRadius: 12, fontWeight: 500, color: '#B5502F', background: '#F3E2DA' }}>🗑 Стереть все данные</button>
+          ) : (
+            <div>
+              <div style={{ fontSize: 14, marginBottom: 12, color: '#6B7268' }}>Это удалит все доходы, траты и цели без возможности вернуть. Точно?</div>
+              <div style={{ display: 'flex', gap: 8 }}>
+                <button onClick={() => setConfirmingReset(false)} style={{ flex: 1, padding: 12, borderRadius: 12, fontWeight: 500, background: '#F0EEE4', color: '#6B7268' }}>Отмена</button>
+                <button onClick={() => { onReset(); setConfirmingReset(false); onClose(); }} style={{ flex: 1, padding: 12, borderRadius: 12, fontWeight: 500, color: '#fff', background: '#B5502F' }}>Да, стереть</button>
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function GoalModal({ category, onAdd, onClose }) {
+  const [name, setName] = useState('');
+  const [target, setTarget] = useState('');
+  return (
+    <div style={{ position: 'fixed', inset: 0, display: 'flex', alignItems: 'flex-end', justifyContent: 'center', background: 'rgba(27,43,34,0.4)' }}>
+      <div style={{ width: '100%', maxWidth: 480, borderRadius: '24px 24px 0 0', padding: 24, background: '#fff' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 }}>
+          <h2 className="ff-display" style={{ fontSize: 18, fontWeight: 600, margin: 0 }}>Новая цель · {META[category].label}</h2>
+          <button onClick={onClose} style={{ background: 'none' }}>✕</button>
+        </div>
+        <Field label="Название">
+          <input style={inputStyle} value={name} onChange={e => setName(e.target.value)} placeholder={category === 'wants' ? 'Поездка в Грузию' : 'Погашение долга'} />
+        </Field>
+        <Field label="Целевая сумма">
+          <input type="number" style={inputStyle} value={target} onChange={e => setTarget(e.target.value)} placeholder="0" />
+        </Field>
+        <button onClick={() => onAdd(category, name, target)} style={{ width: '100%', padding: 12, borderRadius: 12, fontWeight: 500, color: '#fff', background: META[category].color }}>Добавить цель</button>
+      </div>
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+</script>
+</body>
+</html>
