@@ -207,11 +207,16 @@ function App() {
   const [expAmount, setExpAmount] = useState('');
 
   useEffect(() => {
-    if (tg) { tg.ready(); tg.expand(); }
+    if (tg) { try { tg.ready(); tg.expand(); } catch (e) { /* вне Telegram эти методы могут быть недоступны */ } }
     (async () => {
-      const raw = await storage.get('finance-data');
-      if (raw) { try { setData(JSON.parse(raw)); } catch (e) {} }
-      setLoaded(true);
+      try {
+        const raw = await storage.get('finance-data');
+        if (raw) { try { setData(JSON.parse(raw)); } catch (e) {} }
+      } catch (e) {
+        console.error('Ошибка загрузки данных:', e);
+      } finally {
+        setLoaded(true);
+      }
     })();
   }, []);
 
