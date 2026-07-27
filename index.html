@@ -5,16 +5,24 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
 <title>Финансы</title>
 <script src="https://telegram.org/js/telegram-web-app.js"></script>
-<script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
-<script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
-<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.5/babel.min.js"></script>
 <style>
-  @import url('https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,600;9..144,700&family=IBM+Plex+Sans:wght@400;500;600&display=swap');
+  @import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=IBM+Plex+Sans:wght@400;500;600&display=swap');
   * { box-sizing: border-box; }
   body { margin: 0; background: #EAEFE9; font-family: 'IBM Plex Sans', sans-serif; color: #1B2B22; }
-  .ff-display { font-family: 'Fraunces', serif; }
+  .ff-display { font-family: 'Space Grotesk', sans-serif; letter-spacing: -0.01em; }
   input:focus { border-color: #3E5C76 !important; outline: none; }
   button { cursor: pointer; border: none; font-family: inherit; }
+  .btn-ios {
+    border-radius: 16px;
+    font-weight: 600;
+    transition: transform 0.12s ease, opacity 0.12s ease, box-shadow 0.12s ease;
+    box-shadow: 0 3px 10px rgba(0,0,0,0.12), inset 0 1px 0 rgba(255,255,255,0.25);
+    background-image: linear-gradient(180deg, rgba(255,255,255,0.22), rgba(255,255,255,0) 50%);
+  }
+  .btn-ios:active { transform: scale(0.965); opacity: 0.9; box-shadow: 0 1px 4px rgba(0,0,0,0.10); }
 </style>
 </head>
 <body>
@@ -23,9 +31,9 @@
 const { useState, useEffect, useMemo } = React;
 
 const META = {
-  needs:   { label: 'Необходимое', hint: 'На жизнь',   color: '#3E5C76', soft: '#E4EBF1' },
-  wants:   { label: 'Желания',     hint: 'Для себя',   color: '#B5502F', soft: '#F3E2DA' },
-  savings: { label: 'Накопления',  hint: 'На будущее', color: '#8A6E1E', soft: '#F0E9D2' },
+  needs:   { label: 'Необходимое', hint: 'На жизнь',   color: '#4361EE', soft: '#E8EDFC' },
+  wants:   { label: 'Желания',     hint: 'Для себя',   color: '#FF6B4A', soft: '#FFEBE3' },
+  savings: { label: 'Накопления',  hint: 'На будущее', color: '#F2A93F', soft: '#FCF0DC' },
 };
 const CATS = ['needs', 'wants', 'savings'];
 const fmt = (n) => new Intl.NumberFormat('ru-RU').format(Math.round(n || 0)) + ' ₽';
@@ -64,23 +72,44 @@ const storage = {
   },
 };
 
-function Donut({ segments, size = 168, stroke = 20 }) {
+function Donut({ segments, size = 176, stroke = 18 }) {
+  const pad = 22;
+  const vb = size + pad * 2;
   const r = (size - stroke) / 2;
   const c = 2 * Math.PI * r;
   const total = segments.reduce((s, x) => s + x.value, 0) || 1;
+  const gap = segments.length > 1 ? 7 : 0;
+  const cx = vb / 2, cy = vb / 2;
   let offset = 0;
   return (
-    <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`}>
-      <circle cx={size / 2} cy={size / 2} r={r} fill="none" stroke="#E7E4D8" strokeWidth={stroke} />
+    <svg width={vb} height={vb} viewBox={`0 0 ${vb} ${vb}`} style={{ overflow: 'visible' }}>
+      <defs>
+        <filter id="ringGlow" x="-80%" y="-80%" width="260%" height="260%">
+          <feGaussianBlur stdDeviation="4" result="blur" />
+          <feMerge><feMergeNode in="blur" /><feMergeNode in="SourceGraphic" /></feMerge>
+        </filter>
+        {segments.map((s, i) => (
+          <linearGradient id={`ringGrad-${i}`} key={i} x1="0%" y1="0%" x2="100%" y2="100%">
+            <stop offset="0%" stopColor={s.color} stopOpacity="0.55" />
+            <stop offset="100%" stopColor={s.color} stopOpacity="1" />
+          </linearGradient>
+        ))}
+      </defs>
+      <circle cx={cx} cy={cy} r={r} fill="none" stroke="#E7E4D8" strokeWidth={stroke} />
       {segments.map((s, i) => {
         const frac = s.value / total;
-        const dash = frac * c;
+        const rawLen = frac * c;
+        const dash = Math.max(rawLen - gap, 0);
         const el = (
-          <circle key={i} cx={size / 2} cy={size / 2} r={r} fill="none" stroke={s.color} strokeWidth={stroke}
-            strokeDasharray={`${dash} ${c - dash}`} strokeDashoffset={-offset} strokeLinecap="butt"
-            transform={`rotate(-90 ${size / 2} ${size / 2})`} />
+          <circle
+            key={i} cx={cx} cy={cy} r={r} fill="none"
+            stroke={`url(#ringGrad-${i})`} strokeWidth={stroke}
+            strokeDasharray={`${dash} ${c - dash}`} strokeDashoffset={-offset - gap / 2}
+            strokeLinecap="round" filter="url(#ringGlow)"
+            transform={`rotate(-90 ${cx} ${cy})`}
+          />
         );
-        offset += dash;
+        offset += rawLen;
         return el;
       })}
     </svg>
@@ -111,6 +140,42 @@ function Field({ label, children }) {
 }
 
 const inputStyle = { width: '100%', borderRadius: 12, padding: '12px 14px', fontSize: 16, border: '1px solid #DDD8C8', background: '#fff' };
+
+// --- Custom line icons (replace emoji) ---
+const iconProps = { width: 20, height: 20, viewBox: '0 0 20 20', fill: 'none', stroke: 'currentColor', strokeWidth: 1.6, strokeLinecap: 'round', strokeLinejoin: 'round' };
+function IconSettings(props) {
+  return <svg {...iconProps} {...props}><circle cx="10" cy="10" r="7" strokeWidth="3" strokeDasharray="2.75 2.75" /><circle cx="10" cy="10" r="2.2" /></svg>;
+}
+function IconHome(props) {
+  return <svg {...iconProps} {...props}><path d="M3 9.5L10 3l7 6.5" /><path d="M5 8.5V17h10V8.5" /><path d="M8 17v-5h4v5" /></svg>;
+}
+function IconIncome(props) {
+  return <svg {...iconProps} {...props}><path d="M4 12l4-4.5L11 11l5-6" /><path d="M12 5h4v4" /></svg>;
+}
+function IconExpense(props) {
+  return <svg {...iconProps} {...props}><path d="M4 8l4 4.5L11 9l5 6" /><path d="M12 15h4v-4" /></svg>;
+}
+function IconGoal(props) {
+  return <svg {...iconProps} {...props}><circle cx="10" cy="10" r="7" /><circle cx="10" cy="10" r="3.4" /><circle cx="10" cy="10" r="0.6" fill="currentColor" /></svg>;
+}
+function IconAnalytics(props) {
+  return <svg {...iconProps} {...props}><path d="M4 16V9M10 16V4M16 16v-6.5" /></svg>;
+}
+function IconTrash(props) {
+  return <svg {...iconProps} {...props} width={16} height={16}><path d="M4 6h12" /><path d="M8 6V4.5h4V6" /><path d="M5.5 6l.6 9.5h7.8l.6-9.5" /></svg>;
+}
+function IconPlus(props) {
+  return <svg {...iconProps} {...props} width={16} height={16}><path d="M8 3v10M3 8h10" /></svg>;
+}
+function IconBack(props) {
+  return <svg {...iconProps} {...props}><path d="M12.5 4L6 10l6.5 6" /></svg>;
+}
+function IconClose(props) {
+  return <svg {...iconProps} {...props} width={18} height={18}><path d="M5 5l10 10M15 5L5 15" /></svg>;
+}
+function IconCheck(props) {
+  return <svg {...iconProps} {...props}><path d="M4 10.5l4 4L16 6" /></svg>;
+}
 
 function GoalBar({ goal, color }) {
   const pct = goal.target > 0 ? Math.min(100, (goal.current / goal.target) * 100) : 0;
@@ -275,7 +340,7 @@ function App() {
             <>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 24 }}>
                 <h1 className="ff-display" style={{ fontSize: 24, fontWeight: 600, margin: 0 }}>Финансы</h1>
-                <button onClick={() => setShowSettings(true)} style={{ padding: 8, borderRadius: 999, background: '#fff' }}>⚙️</button>
+                <button onClick={() => setShowSettings(true)} style={{ padding: 8, borderRadius: 999, background: '#fff', color: '#6B7268', display: 'flex' }}><IconSettings /></button>
               </div>
               <div style={{ borderRadius: 24, padding: 24, marginBottom: 20, background: '#fff', display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
                 <Donut segments={CATS.map(c => ({ value: data.balances[c] > 0 ? data.balances[c] : 0.0001, color: META[c].color }))} />
@@ -311,7 +376,7 @@ function App() {
               <Field label="Источник (необязательно)">
                 <input style={inputStyle} type="text" placeholder="Фриланс, зарплата…" value={incomeSource} onChange={e => setIncomeSource(e.target.value)} />
               </Field>
-              <button onClick={startAllocation} style={{ width: '100%', padding: '14px', borderRadius: 12, fontWeight: 500, color: '#fff', background: '#3E5C76' }}>⬆️ Распределить</button>
+              <button onClick={startAllocation} className="btn-ios" style={{ width: '100%', padding: '14px', color: '#fff', background: '#3E5C76', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8 }}><IconIncome /> Распределить</button>
               {data.incomeLog.length > 0 && (
                 <div style={{ marginTop: 32 }}>
                   <h2 style={{ fontSize: 14, fontWeight: 500, color: '#6B7268', marginBottom: 12 }}>Последние поступления</h2>
@@ -320,7 +385,7 @@ function App() {
                       <span style={{ fontSize: 14 }}>{x.source}</span>
                       <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
                         <span style={{ fontWeight: 500 }}>{fmt(x.amount)}</span>
-                        <button onClick={() => deleteIncome(x)} style={{ background: 'none' }}>🗑</button>
+                        <button onClick={() => deleteIncome(x)} style={{ background: 'none', color: '#B3ADA0', display: 'flex' }}><IconTrash /></button>
                       </div>
                     </div>
                   ))}
@@ -348,7 +413,7 @@ function App() {
               <Field label="Сумма">
                 <input style={inputStyle} type="number" inputMode="decimal" placeholder="0" value={expAmount} onChange={e => setExpAmount(e.target.value)} />
               </Field>
-              <button onClick={addExpense} style={{ width: '100%', padding: 14, borderRadius: 12, fontWeight: 500, color: '#fff', background: META[expCategory].color }}>⬇️ Записать трату</button>
+              <button onClick={addExpense} className="btn-ios" style={{ width: '100%', padding: 14, color: '#fff', background: META[expCategory].color, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8 }}><IconExpense /> Записать трату</button>
               {data.expenseLog.length > 0 && (
                 <div style={{ marginTop: 32 }}>
                   <h2 style={{ fontSize: 14, fontWeight: 500, color: '#6B7268', marginBottom: 12 }}>Последние траты</h2>
@@ -360,7 +425,7 @@ function App() {
                       </div>
                       <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
                         <span style={{ fontWeight: 500 }}>−{fmt(x.amount)}</span>
-                        <button onClick={() => deleteExpense(x)} style={{ background: 'none' }}>🗑</button>
+                        <button onClick={() => deleteExpense(x)} style={{ background: 'none', color: '#B3ADA0', display: 'flex' }}><IconTrash /></button>
                       </div>
                     </div>
                   ))}
@@ -374,7 +439,7 @@ function App() {
                 <div key={cat} style={{ marginBottom: 28 }}>
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
                     <h2 style={{ fontWeight: 500, color: META[cat].color, margin: 0 }}>{META[cat].label}</h2>
-                    <button onClick={() => setGoalModal({ category: cat })} style={{ padding: 6, borderRadius: 999, background: META[cat].soft, color: META[cat].color }}>➕</button>
+                    <button onClick={() => setGoalModal({ category: cat })} style={{ padding: 6, borderRadius: 999, background: META[cat].soft, color: META[cat].color, display: 'flex' }}><IconPlus /></button>
                   </div>
                   {data.goals[cat].length === 0 ? (
                     <div style={{ borderRadius: 12, padding: 16, fontSize: 14, background: '#fff', color: '#6B7268' }}>
@@ -383,7 +448,7 @@ function App() {
                   ) : data.goals[cat].map(g => (
                     <div key={g.id} style={{ borderRadius: 12, padding: 16, marginBottom: 12, background: '#fff', display: 'flex', alignItems: 'flex-start' }}>
                       <div style={{ flex: 1 }}><GoalBar goal={g} color={META[cat].color} /></div>
-                      <button onClick={() => deleteGoal(cat, g.id)} style={{ marginLeft: 12, background: 'none' }}>🗑</button>
+                      <button onClick={() => deleteGoal(cat, g.id)} style={{ marginLeft: 12, background: 'none', color: '#B3ADA0', display: 'flex' }}><IconTrash /></button>
                     </div>
                   ))}
                 </div>
@@ -431,15 +496,15 @@ function App() {
         {!pending && (
           <div style={{ position: 'fixed', bottom: 0, width: '100%', maxWidth: 480, display: 'flex', justifyContent: 'space-around', alignItems: 'center', padding: '10px 0', background: '#fff', borderTop: '1px solid #E7E4D8' }}>
             {[
-              { id: 'dashboard', icon: '🏠', label: 'Главная' },
-              { id: 'income', icon: '⬆️', label: 'Доход' },
-              { id: 'expense', icon: '⬇️', label: 'Траты' },
-              { id: 'goals', icon: '🎯', label: 'Цели' },
-              { id: 'analytics', icon: '📊', label: 'Аналитика' },
+              { id: 'dashboard', Icon: IconHome, label: 'Главная' },
+              { id: 'income', Icon: IconIncome, label: 'Доход' },
+              { id: 'expense', Icon: IconExpense, label: 'Траты' },
+              { id: 'goals', Icon: IconGoal, label: 'Цели' },
+              { id: 'analytics', Icon: IconAnalytics, label: 'Аналитика' },
             ].map(t => (
-              <button key={t.id} onClick={() => setTab(t.id)} style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 2, background: 'none', padding: '0 8px' }}>
-                <span style={{ fontSize: 18, opacity: tab === t.id ? 1 : 0.4 }}>{t.icon}</span>
-                <span style={{ fontSize: 10, color: tab === t.id ? '#1B2B22' : '#B3ADA0' }}>{t.label}</span>
+              <button key={t.id} onClick={() => setTab(t.id)} style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 2, background: 'none', padding: '0 8px', color: tab === t.id ? '#1B2B22' : '#B3ADA0' }}>
+                <t.Icon />
+                <span style={{ fontSize: 10 }}>{t.label}</span>
               </button>
             ))}
           </div>
@@ -462,7 +527,7 @@ function AllocateView({ pending, setPending, goals, onConfirm, onCancel }) {
   return (
     <div>
       <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 24 }}>
-        <button onClick={onCancel} style={{ padding: 8, borderRadius: 999, background: '#fff' }}>←</button>
+        <button onClick={onCancel} style={{ padding: 8, borderRadius: 999, background: '#fff', color: '#1B2B22', display: 'flex' }}><IconBack /></button>
         <h1 className="ff-display" style={{ fontSize: 20, fontWeight: 600, margin: 0 }}>Распредели {fmt(pending.amount)}</h1>
       </div>
       <div style={{ borderRadius: 16, padding: 16, marginBottom: 16, background: META.needs.soft }}>
@@ -494,7 +559,7 @@ function AllocateView({ pending, setPending, goals, onConfirm, onCancel }) {
           </div>
         </div>
       ))}
-      <button onClick={onConfirm} disabled={over} style={{ width: '100%', padding: 14, borderRadius: 12, fontWeight: 500, color: '#fff', background: over ? '#B3ADA0' : '#1B2B22', marginTop: 8 }}>✓ Подтвердить</button>
+      <button onClick={onConfirm} disabled={over} className="btn-ios" style={{ width: '100%', padding: 14, color: '#fff', background: over ? '#B3ADA0' : '#1B2B22', marginTop: 8, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8 }}><IconCheck /> Подтвердить</button>
     </div>
   );
 }
@@ -508,7 +573,7 @@ function SettingsModal({ percents, onSave, onClose, onReset }) {
       <div style={{ width: '100%', maxWidth: 480, borderRadius: '24px 24px 0 0', padding: 24, background: '#fff' }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 }}>
           <h2 className="ff-display" style={{ fontSize: 18, fontWeight: 600, margin: 0 }}>Проценты распределения</h2>
-          <button onClick={onClose} style={{ background: 'none' }}>✕</button>
+          <button onClick={onClose} style={{ background: 'none', color: '#6B7268', display: 'flex' }}><IconClose /></button>
         </div>
         {CATS.map(c => (
           <Field key={c} label={META[c].label}>
@@ -519,7 +584,7 @@ function SettingsModal({ percents, onSave, onClose, onReset }) {
         <button onClick={() => { if (onSave(p)) onClose(); }} disabled={sum !== 100} style={{ width: '100%', padding: 12, borderRadius: 12, fontWeight: 500, color: '#fff', background: sum === 100 ? '#3E5C76' : '#B3ADA0', marginBottom: 12 }}>Сохранить</button>
         <div style={{ paddingTop: 12, borderTop: '1px solid #E7E4D8' }}>
           {!confirmingReset ? (
-            <button onClick={() => setConfirmingReset(true)} style={{ width: '100%', padding: 12, borderRadius: 12, fontWeight: 500, color: '#B5502F', background: '#F3E2DA' }}>🗑 Стереть все данные</button>
+            <button onClick={() => setConfirmingReset(true)} style={{ width: '100%', padding: 12, borderRadius: 12, fontWeight: 500, color: '#B5502F', background: '#F3E2DA', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8 }}><IconTrash /> Стереть все данные</button>
           ) : (
             <div>
               <div style={{ fontSize: 14, marginBottom: 12, color: '#6B7268' }}>Это удалит все доходы, траты и цели без возможности вернуть. Точно?</div>
@@ -543,7 +608,7 @@ function GoalModal({ category, onAdd, onClose }) {
       <div style={{ width: '100%', maxWidth: 480, borderRadius: '24px 24px 0 0', padding: 24, background: '#fff' }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 }}>
           <h2 className="ff-display" style={{ fontSize: 18, fontWeight: 600, margin: 0 }}>Новая цель · {META[category].label}</h2>
-          <button onClick={onClose} style={{ background: 'none' }}>✕</button>
+          <button onClick={onClose} style={{ background: 'none', color: '#6B7268', display: 'flex' }}><IconClose /></button>
         </div>
         <Field label="Название">
           <input style={inputStyle} value={name} onChange={e => setName(e.target.value)} placeholder={category === 'wants' ? 'Поездка в Грузию' : 'Погашение долга'} />
