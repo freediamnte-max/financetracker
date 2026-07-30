@@ -36,7 +36,27 @@ const META = {
   savings: { label: 'Накопления',  hint: 'На будущее', color: '#F2A93F', soft: '#FCF0DC' },
 };
 const CATS = ['needs', 'wants', 'savings'];
-const fmt = (n) => new Intl.NumberFormat('ru-RU').format(Math.round(n || 0)) + ' ₽';
+const CURRENCIES = [
+  { code: 'RUB', label: '₽ Рубль' },
+  { code: 'USD', label: '$ Доллар' },
+  { code: 'EUR', label: '€ Евро' },
+  { code: 'UAH', label: '₴ Гривна' },
+];
+// All amounts are stored internally in RUB. FX_STATE lets fmt() render them
+// in whichever currency the user picked, using the latest fetched rate — without
+// touching any stored numbers.
+const FX_STATE = { currency: 'RUB', rates: null };
+function fmt(amountRub) {
+  const cur = FX_STATE.currency || 'RUB';
+  const rate = cur === 'RUB' ? 1 : (FX_STATE.rates && FX_STATE.rates[cur]);
+  const converted = rate ? amountRub * rate : amountRub;
+  const effectiveCur = rate ? cur : 'RUB';
+  try {
+    return new Intl.NumberFormat('ru-RU', { style: 'currency', currency: effectiveCur, maximumFractionDigits: effectiveCur === 'RUB' ? 0 : 2 }).format(converted || 0);
+  } catch (e) {
+    return new Intl.NumberFormat('ru-RU').format(Math.round(converted || 0)) + ' ' + effectiveCur;
+  }
+}
 const uid = () => Math.random().toString(36).slice(2, 9);
 
 const DEFAULT_DATA = {
@@ -46,6 +66,8 @@ const DEFAULT_DATA = {
   subcats: { needs: ['Еда', 'Транспорт', 'Интернет'], wants: ['Развлечения'] },
   incomeLog: [],
   expenseLog: [],
+  displayCurrency: 'RUB',
+  incomeSources: [],
 };
 
 // --- Storage: Telegram CloudStorage when running inside Telegram, localStorage otherwise ---
@@ -106,6 +128,7 @@ function Donut({ segments, size = 176, stroke = 18 }) {
             stroke={`url(#ringGrad-${i})`} strokeWidth={stroke}
             strokeDasharray={`${dash} ${c - dash}`} strokeDashoffset={-offset - gap / 2}
             strokeLinecap="round" filter="url(#ringGlow)"
+            style={{ transition: 'stroke-dasharray 0.7s cubic-bezier(.4,0,.2,1), stroke-dashoffset 0.7s cubic-bezier(.4,0,.2,1)' }}
             transform={`rotate(-90 ${cx} ${cy})`}
           />
         );
@@ -202,9 +225,12 @@ function App() {
 
   const [incomeAmount, setIncomeAmount] = useState('');
   const [incomeSource, setIncomeSource] = useState('');
+  const [incomeCurrency, setIncomeCurrency] = useState('RUB');
   const [expCategory, setExpCategory] = useState('needs');
   const [expSubcat, setExpSubcat] = useState('');
   const [expAmount, setExpAmount] = useState('');
+  const [rates, setRates] = useState(null);
+  const [ratesError, setRatesError] = useState(false);
 
   useEffect(() => {
     if (tg) { try { tg.ready(); tg.expand(); } catch (e) { /* вне Telegram эти методы могут быть недоступны */ } }
@@ -225,11 +251,51 @@ function App() {
     storage.set('finance-data', JSON.stringify(data));
   }, [data, loaded]);
 
+  // Load cached exchange rates, refresh from a public API if stale (>12h)
+  useEffect(() => {
+    if (!loaded) return;
+    (async () => {
+      try {
+        const cachedRaw = await storage.get('fx-rates');
+        let cached = null;
+        if (cachedRaw) { try { cached = JSON.parse(cachedRaw); } catch (e) {} }
+        if (cached && cached.rates) setRates(cached.rates);
+        const stale = !cached || (Date.now() - cached.fetchedAt) > 12 * 60 * 60 * 1000;
+        if (stale) {
+          const res = await fetch('https://open.er-api.com/v6/latest/RUB');
+          const json = await res.json();
+          if (json && json.rates) {
+            setRates(json.rates);
+            await storage.set('fx-rates', JSON.stringify({ rates: json.rates, fetchedAt: Date.now() }));
+            setRatesError(false);
+          }
+        }
+      } catch (e) {
+        console.error('Курс валют недоступен:', e);
+        setRatesError(true);
+      }
+    })();
+  }, [loaded]);
+
+  // Keep the shared FX_STATE in sync — done synchronously during render (not in an effect)
+  // so that fmt() calls later in this very render already use the current currency/rates.
+  FX_STATE.currency = data.displayCurrency || 'RUB';
+  FX_STATE.rates = rates;
+
   const totalBalance = data.balances.needs + data.balances.wants + data.balances.savings;
 
   function startAllocation() {
-    const amt = parseFloat(incomeAmount);
-    if (!amt || amt <= 0) return;
+    const entered = parseFloat(incomeAmount);
+    if (!entered || entered <= 0) return;
+    // Entered amount may be in a foreign currency — convert to RUB (the storage currency) once, at entry.
+    let amt = entered;
+    if (incomeCurrency !== 'RUB') {
+      if (rates && rates[incomeCurrency]) {
+        amt = entered / rates[incomeCurrency];
+      } else {
+        return; // курс ещё не загрузился — не даём внести без конвертации
+      }
+    }
     const needsShare = Math.round(amt * data.percents.needs) / 100;
     const wantsShare = Math.round(amt * data.percents.wants) / 100;
     const savingsShare = Math.round(amt * data.percents.savings) / 100;
@@ -246,18 +312,22 @@ function App() {
       wants: data.goals.wants.map(g => ({ ...g, current: g.current + (parseFloat(pending.wantsAlloc[g.id]) || 0) })),
       savings: data.goals.savings.map(g => ({ ...g, current: g.current + (parseFloat(pending.savingsAlloc[g.id]) || 0) })),
     };
-    setData(d => ({
-      ...d,
-      balances: {
-        needs: d.balances.needs + pending.needsShare,
-        wants: d.balances.wants + (pending.wantsShare - wantsAllocated),
-        savings: d.balances.savings + (pending.savingsShare - savingsAllocated),
-      },
-      goals: newGoals,
-      incomeLog: [...d.incomeLog, { id: uid(), amount: pending.amount, source: pending.source, date: Date.now(),
-        needsShare: pending.needsShare, wantsShare: pending.wantsShare, savingsShare: pending.savingsShare,
-        wantsAlloc: { ...pending.wantsAlloc }, savingsAlloc: { ...pending.savingsAlloc } }],
-    }));
+    setData(d => {
+      const incomeSources = d.incomeSources.includes(pending.source) ? d.incomeSources : [...d.incomeSources, pending.source];
+      return {
+        ...d,
+        balances: {
+          needs: d.balances.needs + pending.needsShare,
+          wants: d.balances.wants + (pending.wantsShare - wantsAllocated),
+          savings: d.balances.savings + (pending.savingsShare - savingsAllocated),
+        },
+        goals: newGoals,
+        incomeLog: [...d.incomeLog, { id: uid(), amount: pending.amount, source: pending.source, date: Date.now(),
+          needsShare: pending.needsShare, wantsShare: pending.wantsShare, savingsShare: pending.savingsShare,
+          wantsAlloc: { ...pending.wantsAlloc }, savingsAlloc: { ...pending.savingsAlloc } }],
+        incomeSources,
+      };
+    });
     setPending(null); setTab('dashboard');
   }
 
@@ -297,8 +367,17 @@ function App() {
         const list = subcats[expCategory] || [];
         if (!list.includes(subcat)) subcats[expCategory] = [...list, subcat];
       }
-      return { ...d, balances: { ...d.balances, [expCategory]: d.balances[expCategory] - amt },
-        expenseLog: [...d.expenseLog, { id: uid(), category: expCategory, subcat, amount: amt, date: Date.now() }], subcats };
+      const now = new Date();
+      const monthKey = (ts) => { const dt = new Date(ts); return dt.getFullYear() + '-' + dt.getMonth(); };
+      const thisMonth = monthKey(now);
+      const existingIdx = d.expenseLog.findIndex(x => x.category === expCategory && x.subcat === subcat && monthKey(x.date) === thisMonth);
+      let expenseLog;
+      if (existingIdx >= 0) {
+        expenseLog = d.expenseLog.map((x, i) => i === existingIdx ? { ...x, amount: x.amount + amt, date: Date.now() } : x);
+      } else {
+        expenseLog = [...d.expenseLog, { id: uid(), category: expCategory, subcat, amount: amt, date: Date.now() }];
+      }
+      return { ...d, balances: { ...d.balances, [expCategory]: d.balances[expCategory] - amt }, expenseLog, subcats };
     });
     setExpAmount(''); setExpSubcat('');
   }
@@ -376,10 +455,17 @@ function App() {
             <>
               <h1 className="ff-display" style={{ fontSize: 24, fontWeight: 600, marginBottom: 24 }}>Доход</h1>
               <Field label="Сумма">
-                <input style={inputStyle} type="number" inputMode="decimal" placeholder="0" value={incomeAmount} onChange={e => setIncomeAmount(e.target.value)} />
+                <div style={{ display: 'flex', gap: 8 }}>
+                  <input style={{ ...inputStyle, flex: 1 }} type="number" inputMode="decimal" placeholder="0" value={incomeAmount} onChange={e => setIncomeAmount(e.target.value)} />
+                  <select style={{ ...inputStyle, width: 92, flex: 'none' }} value={incomeCurrency} onChange={e => setIncomeCurrency(e.target.value)}>
+                    {CURRENCIES.map(c => <option key={c.code} value={c.code}>{c.code}</option>)}
+                  </select>
+                </div>
+                {incomeCurrency !== 'RUB' && !rates && <div style={{ fontSize: 12, marginTop: 6, color: '#B3ADA0' }}>Загружаю курс…</div>}
               </Field>
               <Field label="Источник (необязательно)">
-                <input style={inputStyle} type="text" placeholder="Фриланс, зарплата…" value={incomeSource} onChange={e => setIncomeSource(e.target.value)} />
+                <input style={inputStyle} type="text" list="income-source-list" placeholder="Фриланс, зарплата…" value={incomeSource} onChange={e => setIncomeSource(e.target.value)} />
+                <datalist id="income-source-list">{(data.incomeSources || []).map(s => <option key={s} value={s} />)}</datalist>
               </Field>
               <button onClick={startAllocation} className="btn-ios" style={{ width: '100%', padding: '14px', color: '#fff', background: '#3E5C76', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8 }}><IconIncome /> Распределить</button>
               {data.incomeLog.length > 0 && (
@@ -515,7 +601,13 @@ function App() {
           </div>
         )}
 
-        {showSettings && <SettingsModal percents={data.percents} onSave={savePercents} onClose={() => setShowSettings(false)} onReset={resetAll} />}
+        {showSettings && (
+          <SettingsModal
+            percents={data.percents} onSave={savePercents} onClose={() => setShowSettings(false)} onReset={resetAll}
+            displayCurrency={data.displayCurrency} onCurrencyChange={(c) => setData(d => ({ ...d, displayCurrency: c }))}
+            rates={rates} ratesError={ratesError}
+          />
+        )}
         {goalModal && <GoalModal category={goalModal.category} onAdd={addGoal} onClose={() => setGoalModal(null)} />}
       </div>
     </div>
@@ -569,17 +661,28 @@ function AllocateView({ pending, setPending, goals, onConfirm, onCancel }) {
   );
 }
 
-function SettingsModal({ percents, onSave, onClose, onReset }) {
+function SettingsModal({ percents, onSave, onClose, onReset, displayCurrency, onCurrencyChange, rates, ratesError }) {
   const [p, setP] = useState(percents);
   const [confirmingReset, setConfirmingReset] = useState(false);
   const sum = p.needs + p.wants + p.savings;
   return (
     <div style={{ position: 'fixed', inset: 0, display: 'flex', alignItems: 'flex-end', justifyContent: 'center', background: 'rgba(27,43,34,0.4)' }}>
-      <div style={{ width: '100%', maxWidth: 480, borderRadius: '24px 24px 0 0', padding: 24, background: '#fff' }}>
+      <div style={{ width: '100%', maxWidth: 480, borderRadius: '24px 24px 0 0', padding: 24, background: '#fff', maxHeight: '85vh', overflowY: 'auto' }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 }}>
-          <h2 className="ff-display" style={{ fontSize: 18, fontWeight: 600, margin: 0 }}>Проценты распределения</h2>
+          <h2 className="ff-display" style={{ fontSize: 18, fontWeight: 600, margin: 0 }}>Настройки</h2>
           <button onClick={onClose} style={{ background: 'none', color: '#6B7268', display: 'flex' }}><IconClose /></button>
         </div>
+
+        <Field label="Валюта отображения">
+          <select style={inputStyle} value={displayCurrency} onChange={e => onCurrencyChange(e.target.value)}>
+            {CURRENCIES.map(c => <option key={c.code} value={c.code}>{c.label}</option>)}
+          </select>
+        </Field>
+        <div style={{ fontSize: 12, marginBottom: 20, color: ratesError ? '#B5502F' : '#6B7268' }}>
+          {ratesError ? 'Курс сейчас недоступен — показываю по последнему сохранённому' : rates ? 'Курс обновляется автоматически' : 'Загружаю курс…'}
+        </div>
+
+        <h3 style={{ fontSize: 14, fontWeight: 500, marginBottom: 12, color: '#6B7268' }}>Проценты распределения</h3>
         {CATS.map(c => (
           <Field key={c} label={META[c].label}>
             <input type="number" style={inputStyle} value={p[c]} onChange={e => setP({ ...p, [c]: parseInt(e.target.value) || 0 })} />
