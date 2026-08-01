@@ -58,6 +58,7 @@ function fmt(amountRub) {
   }
 }
 const uid = () => Math.random().toString(36).slice(2, 9);
+const monthKey = (ts) => { const d = new Date(ts); return d.getFullYear() + '-' + d.getMonth(); };
 
 const DEFAULT_DATA = {
   percents: { needs: 50, wants: 30, savings: 20 },
@@ -393,9 +394,7 @@ function App() {
         const list = subcats[expCategory] || [];
         if (!list.includes(subcat)) subcats[expCategory] = [...list, subcat];
       }
-      const now = new Date();
-      const monthKey = (ts) => { const dt = new Date(ts); return dt.getFullYear() + '-' + dt.getMonth(); };
-      const thisMonth = monthKey(now);
+      const thisMonth = monthKey(Date.now());
       const existingIdx = d.expenseLog.findIndex(x => x.category === expCategory && x.subcat === subcat && monthKey(x.date) === thisMonth);
       let expenseLog;
       if (existingIdx >= 0) {
@@ -432,7 +431,34 @@ function App() {
     const bySubcat = Object.entries(bySubcatMap).map(([name, value]) => ({ name, value })).sort((a, b) => b.value - a.value).slice(0, 6);
     const bestIncome = data.incomeLog.reduce((m, x) => Math.max(m, x.amount), 0);
     const maxSubcat = bySubcat.reduce((m, x) => Math.max(m, x.value), 0);
-    return { totalIncome, totalExpense, byCategory, bySubcat, bestIncome, maxSubcat };
+
+    const thisMonth = monthKey(Date.now());
+    const incomeThisMonth = data.incomeLog.filter(x => monthKey(x.date) === thisMonth).reduce((s, x) => s + x.amount, 0);
+    const expenseThisMonth = data.expenseLog.filter(x => monthKey(x.date) === thisMonth).reduce((s, x) => s + x.amount, 0);
+    const netThisMonth = incomeThisMonth - expenseThisMonth;
+
+    // Сколько от дохода в этом месяце ушло в каждый раздел (Необходимое/Желания/Накопления)
+    const byCategoryThisMonth = { needs: 0, wants: 0, savings: 0 };
+    data.incomeLog.filter(x => monthKey(x.date) === thisMonth).forEach(x => {
+      byCategoryThisMonth.needs += x.needsAmt || 0;
+      byCategoryThisMonth.wants += x.wantsAmt || 0;
+      byCategoryThisMonth.savings += x.savingsAmt || 0;
+    });
+
+    // Сколько именно пришло в каждую цель в этом месяце
+    const goalContribThisMonth = {};
+    data.incomeLog.filter(x => monthKey(x.date) === thisMonth).forEach(x => {
+      Object.entries(x.wantsAlloc || {}).forEach(([gid, v]) => { goalContribThisMonth[gid] = (goalContribThisMonth[gid] || 0) + (parseFloat(v) || 0); });
+      Object.entries(x.savingsAlloc || {}).forEach(([gid, v]) => { goalContribThisMonth[gid] = (goalContribThisMonth[gid] || 0) + (parseFloat(v) || 0); });
+    });
+    // Траты по разделам за этот месяц (сколько потрачено именно из "Накоплений", если оттуда снимали)
+    const expenseByCategoryThisMonth = { needs: 0, wants: 0, savings: 0 };
+    data.expenseLog.filter(x => monthKey(x.date) === thisMonth).forEach(x => { expenseByCategoryThisMonth[x.category] += x.amount; });
+
+    return {
+      totalIncome, totalExpense, byCategory, bySubcat, bestIncome, maxSubcat,
+      incomeThisMonth, expenseThisMonth, netThisMonth, byCategoryThisMonth, goalContribThisMonth, expenseByCategoryThisMonth,
+    };
   }, [data.incomeLog, data.expenseLog]);
 
   if (!loaded) {
@@ -574,6 +600,55 @@ function App() {
           ) : (
             <>
               <h1 className="ff-display" style={{ fontSize: 24, fontWeight: 600, marginBottom: 24 }}>Аналитика</h1>
+
+              <h2 style={{ fontSize: 13, fontWeight: 500, marginBottom: 10, color: '#6B7268', textTransform: 'uppercase', letterSpacing: '0.02em' }}>В этом месяце</h2>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 12 }}>
+                <div style={{ borderRadius: 16, padding: 16, background: '#fff' }}>
+                  <div style={{ fontSize: 12, marginBottom: 4, color: '#6B7268' }}>Доход</div>
+                  <div className="ff-display" style={{ fontSize: 18, fontWeight: 600 }}>{fmt(analytics.incomeThisMonth)}</div>
+                </div>
+                <div style={{ borderRadius: 16, padding: 16, background: '#fff' }}>
+                  <div style={{ fontSize: 12, marginBottom: 4, color: '#6B7268' }}>Траты</div>
+                  <div className="ff-display" style={{ fontSize: 18, fontWeight: 600 }}>{fmt(analytics.expenseThisMonth)}</div>
+                </div>
+              </div>
+              <div style={{ borderRadius: 16, padding: 16, marginBottom: 20, background: analytics.netThisMonth >= 0 ? META.savings.soft : META.wants.soft }}>
+                <div style={{ fontSize: 12, marginBottom: 4, color: analytics.netThisMonth >= 0 ? META.savings.color : META.wants.color }}>Разница за месяц</div>
+                <div className="ff-display" style={{ fontSize: 20, fontWeight: 600, color: analytics.netThisMonth >= 0 ? META.savings.color : META.wants.color }}>
+                  {analytics.netThisMonth >= 0 ? '+' : ''}{fmt(analytics.netThisMonth)}
+                </div>
+              </div>
+
+              {(analytics.byCategoryThisMonth.needs + analytics.byCategoryThisMonth.wants + analytics.byCategoryThisMonth.savings) > 0 && (
+                <div style={{ borderRadius: 16, padding: 16, marginBottom: 20, background: '#fff' }}>
+                  <div style={{ fontSize: 14, fontWeight: 500, marginBottom: 12 }}>Куда ушёл доход в этом месяце</div>
+                  {CATS.map(c => (
+                    <Bar key={c} label={META[c].label} value={analytics.byCategoryThisMonth[c]} max={analytics.incomeThisMonth} color={META[c].color} />
+                  ))}
+                </div>
+              )}
+
+              {(data.goals.savings.length > 0 || data.goals.wants.length > 0) && (
+                <div style={{ borderRadius: 16, padding: 16, marginBottom: 20, background: '#fff' }}>
+                  <div style={{ fontSize: 14, fontWeight: 500, marginBottom: 12 }}>Пополнения целей в этом месяце</div>
+                  {['savings', 'wants'].flatMap(cat => data.goals[cat].map(g => {
+                    const contrib = analytics.goalContribThisMonth[g.id] || 0;
+                    return (
+                      <div key={g.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '8px 0', borderBottom: '1px solid #F0EEE4' }}>
+                        <div>
+                          <div style={{ fontSize: 14, fontWeight: 500 }}>{g.name}</div>
+                          <div style={{ fontSize: 12, color: '#6B7268' }}>{META[cat].label} · всего {fmt(g.current)}{g.target > 0 ? ` / ${fmt(g.target)}` : ''}</div>
+                        </div>
+                        <div className="ff-display" style={{ fontSize: 15, fontWeight: 600, color: contrib > 0 ? META[cat].color : '#B3ADA0' }}>
+                          {contrib > 0 ? '+' + fmt(contrib) : '—'}
+                        </div>
+                      </div>
+                    );
+                  }))}
+                </div>
+              )}
+
+              <h2 style={{ fontSize: 13, fontWeight: 500, marginBottom: 10, marginTop: 28, color: '#6B7268', textTransform: 'uppercase', letterSpacing: '0.02em' }}>За всё время</h2>
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 20 }}>
                 <div style={{ borderRadius: 16, padding: 16, background: '#fff' }}>
                   <div style={{ fontSize: 12, marginBottom: 4, color: '#6B7268' }}>Всего доход</div>
