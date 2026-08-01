@@ -296,18 +296,23 @@ function App() {
         return; // курс ещё не загрузился — не даём внести без конвертации
       }
     }
-    const needsShare = Math.round(amt * data.percents.needs) / 100;
-    const wantsShare = Math.round(amt * data.percents.wants) / 100;
-    const savingsShare = Math.round(amt * data.percents.savings) / 100;
-    setPending({ amount: amt, source: incomeSource.trim() || 'Доход', needsShare, wantsShare, savingsShare, wantsAlloc: {}, savingsAlloc: {} });
+    // Проценты — только стартовая подсказка, дальше сумму можно распределить вручную как угодно.
+    const needsAmt = Math.round(amt * data.percents.needs) / 100;
+    const wantsAmt = Math.round(amt * data.percents.wants) / 100;
+    const savingsAmt = Math.round((amt - needsAmt - wantsAmt) * 100) / 100;
+    setPending({ amount: amt, source: incomeSource.trim() || 'Доход', needsAmt, wantsAmt, savingsAmt, wantsAlloc: {}, savingsAlloc: {} });
     setIncomeAmount(''); setIncomeSource('');
   }
 
   function confirmAllocation() {
     if (!pending) return;
+    const needsAmt = parseFloat(pending.needsAmt) || 0;
+    const wantsAmt = parseFloat(pending.wantsAmt) || 0;
+    const savingsAmt = parseFloat(pending.savingsAmt) || 0;
+    if (Math.abs(needsAmt + wantsAmt + savingsAmt - pending.amount) > 0.01) return;
     const wantsAllocated = Object.values(pending.wantsAlloc).reduce((s, v) => s + (parseFloat(v) || 0), 0);
     const savingsAllocated = Object.values(pending.savingsAlloc).reduce((s, v) => s + (parseFloat(v) || 0), 0);
-    if (wantsAllocated > pending.wantsShare + 0.01 || savingsAllocated > pending.savingsShare + 0.01) return;
+    if (wantsAllocated > wantsAmt + 0.01 || savingsAllocated > savingsAmt + 0.01) return;
     const newGoals = {
       wants: data.goals.wants.map(g => ({ ...g, current: g.current + (parseFloat(pending.wantsAlloc[g.id]) || 0) })),
       savings: data.goals.savings.map(g => ({ ...g, current: g.current + (parseFloat(pending.savingsAlloc[g.id]) || 0) })),
@@ -317,13 +322,13 @@ function App() {
       return {
         ...d,
         balances: {
-          needs: d.balances.needs + pending.needsShare,
-          wants: d.balances.wants + (pending.wantsShare - wantsAllocated),
-          savings: d.balances.savings + (pending.savingsShare - savingsAllocated),
+          needs: d.balances.needs + needsAmt,
+          wants: d.balances.wants + (wantsAmt - wantsAllocated),
+          savings: d.balances.savings + (savingsAmt - savingsAllocated),
         },
         goals: newGoals,
         incomeLog: [...d.incomeLog, { id: uid(), amount: pending.amount, source: pending.source, date: Date.now(),
-          needsShare: pending.needsShare, wantsShare: pending.wantsShare, savingsShare: pending.savingsShare,
+          needsAmt, wantsAmt, savingsAmt,
           wantsAlloc: { ...pending.wantsAlloc }, savingsAlloc: { ...pending.savingsAlloc } }],
         incomeSources,
       };
@@ -342,9 +347,9 @@ function App() {
       return {
         ...d,
         balances: {
-          needs: d.balances.needs - entry.needsShare,
-          wants: d.balances.wants - (entry.wantsShare - wantsAllocated),
-          savings: d.balances.savings - (entry.savingsShare - savingsAllocated),
+          needs: d.balances.needs - entry.needsAmt,
+          wants: d.balances.wants - (entry.wantsAmt - wantsAllocated),
+          savings: d.balances.savings - (entry.savingsAmt - savingsAllocated),
         },
         goals,
         incomeLog: d.incomeLog.filter(x => x.id !== entry.id),
@@ -615,30 +620,58 @@ function App() {
 }
 
 function AllocateView({ pending, setPending, goals, onConfirm, onCancel }) {
+  const needsAmt = parseFloat(pending.needsAmt) || 0;
+  const wantsAmt = parseFloat(pending.wantsAmt) || 0;
+  const savingsAmt = parseFloat(pending.savingsAmt) || 0;
+  const topSum = needsAmt + wantsAmt + savingsAmt;
+  const topLeft = pending.amount - topSum;
+  const topOver = Math.abs(topLeft) > 0.01;
+
   const wantsAllocated = Object.values(pending.wantsAlloc).reduce((s, v) => s + (parseFloat(v) || 0), 0);
   const savingsAllocated = Object.values(pending.savingsAlloc).reduce((s, v) => s + (parseFloat(v) || 0), 0);
-  const wantsLeft = pending.wantsShare - wantsAllocated;
-  const savingsLeft = pending.savingsShare - savingsAllocated;
-  const over = wantsLeft < -0.01 || savingsLeft < -0.01;
+  const wantsLeft = wantsAmt - wantsAllocated;
+  const savingsLeft = savingsAmt - savingsAllocated;
+  const over = topOver || wantsLeft < -0.01 || savingsLeft < -0.01;
+
   function update(section, id, val) { setPending(p => ({ ...p, [section]: { ...p[section], [id]: val } })); }
+  function updateTop(cat, val) { setPending(p => ({ ...p, [`${cat}Amt`]: val })); }
+  function fillRestInto(cat) {
+    const others = CATS.filter(c => c !== cat).reduce((s, c) => s + (parseFloat(pending[`${c}Amt`]) || 0), 0);
+    setPending(p => ({ ...p, [`${cat}Amt`]: Math.max(0, Math.round((pending.amount - others) * 100) / 100) }));
+  }
+
   return (
     <div>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 24 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 20 }}>
         <button onClick={onCancel} style={{ padding: 8, borderRadius: 999, background: '#fff', color: '#1B2B22', display: 'flex' }}><IconBack /></button>
         <h1 className="ff-display" style={{ fontSize: 20, fontWeight: 600, margin: 0 }}>Распредели {fmt(pending.amount)}</h1>
       </div>
-      <div style={{ borderRadius: 16, padding: 16, marginBottom: 16, background: META.needs.soft }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-          <span style={{ fontWeight: 500, color: META.needs.color }}>{META.needs.label}</span>
-          <span style={{ fontWeight: 600 }}>{fmt(pending.needsShare)}</span>
-        </div>
-        <div style={{ fontSize: 12, marginTop: 4, color: '#6B7268' }}>уходит напрямую в свободные — без целей</div>
+
+      <div style={{ fontSize: 13, marginBottom: 12, color: '#6B7268' }}>
+        Куда пойдут деньги — впиши суммы сам (по умолчанию подставлены проценты из настроек, можно поменять как угодно).
       </div>
+
+      {CATS.map(cat => (
+        <div key={cat} style={{ borderRadius: 16, padding: 14, marginBottom: 10, background: META[cat].soft }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10 }}>
+            <span style={{ fontWeight: 500, color: META[cat].color }}>{META[cat].label}</span>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <input type="number" inputMode="decimal" style={{ width: 100, textAlign: 'right', borderRadius: 8, padding: '6px 8px', fontSize: 14, border: '1px solid #DDD8C8', background: '#fff' }}
+                value={pending[`${cat}Amt`]} onChange={e => updateTop(cat, e.target.value)} />
+              <button onClick={() => fillRestInto(cat)} style={{ fontSize: 11, padding: '6px 8px', borderRadius: 8, background: '#fff', color: META[cat].color }}>Остаток сюда</button>
+            </div>
+          </div>
+        </div>
+      ))}
+      <div style={{ fontSize: 12, marginBottom: 20, color: topOver ? '#B5502F' : '#6B7268' }}>
+        {topOver ? (topLeft > 0 ? `Не распределено ещё: ${fmt(topLeft)}` : `Распределено больше, чем пришло, на ${fmt(-topLeft)}`) : 'Вся сумма распределена ✓'}
+      </div>
+
       {['wants', 'savings'].map(section => (
         <div key={section} style={{ marginBottom: 20 }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
-            <span style={{ fontWeight: 500, color: META[section].color }}>{META[section].label}</span>
-            <span style={{ fontWeight: 600 }}>{fmt(pending[`${section}Share`])}</span>
+            <span style={{ fontWeight: 500, color: META[section].color }}>{META[section].label} · цели</span>
+            <span style={{ fontWeight: 600 }}>{fmt(section === 'wants' ? wantsAmt : savingsAmt)}</span>
           </div>
           {goals[section].length === 0 ? (
             <div style={{ borderRadius: 12, padding: 12, fontSize: 14, background: '#fff', color: '#6B7268' }}>
