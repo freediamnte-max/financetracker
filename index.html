@@ -237,7 +237,27 @@ function App() {
     (async () => {
       try {
         const raw = await storage.get('finance-data');
-        if (raw) { try { setData(JSON.parse(raw)); } catch (e) {} }
+        if (raw) {
+          try {
+            const parsed = JSON.parse(raw);
+            // Мягко объединяем со значениями по умолчанию — если в старых сохранённых
+            // данных не хватает какого-то нового поля, приложение не падает, а просто
+            // подставляет дефолт для него.
+            setData({
+              ...DEFAULT_DATA, ...parsed,
+              percents: { ...DEFAULT_DATA.percents, ...(parsed.percents || {}) },
+              balances: { ...DEFAULT_DATA.balances, ...(parsed.balances || {}) },
+              goals: {
+                wants: (parsed.goals && parsed.goals.wants) || [],
+                savings: (parsed.goals && parsed.goals.savings) || [],
+              },
+              subcats: { ...DEFAULT_DATA.subcats, ...(parsed.subcats || {}) },
+              incomeLog: parsed.incomeLog || [],
+              expenseLog: parsed.expenseLog || [],
+              incomeSources: parsed.incomeSources || [],
+            });
+          } catch (e) { /* повреждённые сохранённые данные — остаёмся на значениях по умолчанию */ }
+        }
       } catch (e) {
         console.error('Ошибка загрузки данных:', e);
       } finally {
@@ -318,7 +338,8 @@ function App() {
       savings: data.goals.savings.map(g => ({ ...g, current: g.current + (parseFloat(pending.savingsAlloc[g.id]) || 0) })),
     };
     setData(d => {
-      const incomeSources = d.incomeSources.includes(pending.source) ? d.incomeSources : [...d.incomeSources, pending.source];
+      const existingSources = d.incomeSources || [];
+      const incomeSources = existingSources.includes(pending.source) ? existingSources : [...existingSources, pending.source];
       return {
         ...d,
         balances: {
